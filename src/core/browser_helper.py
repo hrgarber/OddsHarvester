@@ -205,7 +205,25 @@ class BrowserHelper:
             display_label = desired_period.get_display_label(desired_period)
             self.logger.info(f"Ensuring match period is set to: {display_label}")
 
-            # Check if period selector nav exists
+            # Try to find the period element directly by text (works for both pre-match and live)
+            # This is more robust than relying on a specific container
+            period_element = await self._find_period_element(page, display_label)
+
+            if period_element:
+                # Check if it's already active
+                element_classes = await period_element.get_attribute("class") or ""
+                if OddsPortalSelectors.PERIOD_ACTIVE_CLASS in element_classes:
+                    self.logger.info(f"Match period already set to '{display_label}'. No action needed.")
+                    return True
+
+                # Click to select
+                self.logger.info(f"Clicking match period: {display_label}")
+                await period_element.click()
+                await page.wait_for_timeout(500)
+                self.logger.info(f"Successfully set match period to: {display_label}")
+                return True
+
+            # Fallback: try the original container-based approach
             period_container = await page.query_selector(OddsPortalSelectors.PERIOD_SELECTOR_CONTAINER)
             if not period_container:
                 self.logger.warning("Period selector navigation not found on page. Skipping period selection.")
@@ -269,6 +287,43 @@ class BrowserHelper:
         except Exception as e:
             self.logger.error(f"Error setting match period: {e}")
             return False
+
+    async def _find_period_element(self, page: Page, display_label: str):
+        """
+        Find a period element by its display label text.
+        Works for both pre-match and live pages by searching all potential period buttons.
+
+        Args:
+            page (Page): The Playwright page instance.
+            display_label (str): The period label to find (e.g., "FT including OT").
+
+        Returns:
+            ElementHandle or None: The period element if found.
+        """
+        try:
+            # Look for period buttons with the active-item-calendar class pattern
+            # These are the clickable period tabs
+            period_buttons = await page.query_selector_all(
+                f"div.{OddsPortalSelectors.PERIOD_ACTIVE_CLASS}, "
+                f"div[class*='cursor-pointer']:has-text('{display_label}')"
+            )
+
+            for button in period_buttons:
+                text = await button.text_content()
+                if text and display_label.lower() in text.lower().strip():
+                    return button
+
+            # Alternative: find by exact text match in any div with cursor-pointer
+            all_clickable = await page.query_selector_all("div[class*='cursor-pointer']")
+            for elem in all_clickable:
+                text = await elem.text_content()
+                if text and text.strip() == display_label:
+                    return elem
+
+            return None
+        except Exception as e:
+            self.logger.debug(f"Error finding period element: {e}")
+            return None
 
     async def _get_current_period(self, page: Page) -> str | None:
         """

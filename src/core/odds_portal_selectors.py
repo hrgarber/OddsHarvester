@@ -40,6 +40,13 @@ class OddsPortalSelectors:
     PERIOD_SELECTOR_CONTAINER = "div[data-testid='kickoff-events-nav']"
     PERIOD_ACTIVE_CLASS = "active-item-calendar"
 
+    # Alternative period selectors for live/in-play pages
+    # Live pages use a different container structure
+    PERIOD_SELECTOR_CONTAINERS: ClassVar[list[str]] = [
+        "div[data-testid='kickoff-events-nav']",  # Pre-match pages
+        "div.flex.gap-1.flex-wrap",  # Live pages - period buttons row
+    ]
+
     @staticmethod
     def get_dropdown_selectors_for_market(market_name: str) -> list[str]:
         """Generate dropdown selectors for a specific market name."""

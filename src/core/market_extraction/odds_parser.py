@@ -44,13 +44,21 @@ class OddsParser:
         odds_data = []
         for block in bookmaker_blocks:
             try:
-                img_tag = block.find("img", class_="bookmaker-logo")
-                bookmaker_name = img_tag["title"] if img_tag and "title" in img_tag.attrs else "Unknown"
+                bookmaker_name = self._extract_bookmaker_name(block)
 
-                if not bookmaker_name or (target_bookmaker and bookmaker_name.lower() != target_bookmaker.lower()):
+                if not bookmaker_name or bookmaker_name == "Unknown":
+                    continue
+
+                if target_bookmaker and bookmaker_name.lower() != target_bookmaker.lower():
                     continue
 
                 odds_blocks = block.find_all("div", class_=re.compile(r"flex-center.*flex-col.*font-bold"))
+
+                # Also try alternative odds selectors for live pages
+                if len(odds_blocks) < len(odds_labels):
+                    odds_blocks = block.find_all("p", class_=re.compile(r"height-content"))
+                    # Filter to only elements that look like odds (contain numbers or +/-)
+                    odds_blocks = [b for b in odds_blocks if re.search(r"[\d.+-]", b.get_text(strip=True))]
 
                 if len(odds_blocks) < len(odds_labels):
                     self.logger.warning(f"Incomplete odds data for bookmaker: {bookmaker_name}. Skipping...")
@@ -71,6 +79,67 @@ class OddsParser:
 
         self.logger.info(f"Successfully parsed odds for {len(odds_data)} bookmakers.")
         return odds_data
+
+    def _extract_bookmaker_name(self, block) -> str:
+        """
+        Extract bookmaker name from a block element.
+        Handles both pre-match (img.bookmaker-logo) and live page (p/a text) structures.
+
+        Args:
+            block: BeautifulSoup element containing bookmaker info.
+
+        Returns:
+            str: Bookmaker name or "Unknown" if not found.
+        """
+        # Known bookmaker patterns to validate against
+        bookmaker_patterns = [
+            r"bet365", r"betmgm", r"fanduel", r"draftkings", r"caesars",
+            r"pointsbet", r"betrivers", r"unibet", r"william\s*hill", r"ladbrokes",
+            r"betfair", r"pinnacle", r"bovada", r"betonline", r"mybookie",
+            r"betway", r"888", r"bwin", r"betfred", r"paddy\s*power",
+            r"sportsbet", r"tab", r"neds", r"betsson", r"10bet",
+            r"1xbet", r"melbet", r"22bet", r"stake", r"cloudbet",
+        ]
+
+        def looks_like_bookmaker(name: str) -> bool:
+            """Check if the name looks like a bookmaker."""
+            if not name:
+                return False
+            name_lower = name.lower()
+            # Check against known patterns
+            for pattern in bookmaker_patterns:
+                if re.search(pattern, name_lower):
+                    return True
+            # Heuristics: bookmaker names often end with common suffixes
+            if any(suffix in name_lower for suffix in [".com", ".us", ".uk", ".eu", "bet", "book", "wager"]):
+                return True
+            return False
+
+        # Method 1: img.bookmaker-logo with title attribute (pre-match pages)
+        img_tag = block.find("img", class_="bookmaker-logo")
+        if img_tag and "title" in img_tag.attrs:
+            return img_tag["title"]
+
+        # Method 2: img with alt attribute containing bookmaker name
+        for img_tag in block.find_all("img", alt=True):
+            alt_text = img_tag.get("alt", "")
+            if alt_text and looks_like_bookmaker(alt_text):
+                return alt_text
+
+        # Method 3: Link with bookmaker name (live pages)
+        # Look for <p class="height-content"><a>bookmaker_name</a></p>
+        p_tags = block.find_all("p", class_=re.compile(r"height-content"))
+        for p in p_tags:
+            a_tag = p.find("a")
+            if a_tag:
+                name = a_tag.get_text(strip=True)
+                # Verify it looks like a bookmaker name
+                if name and looks_like_bookmaker(name):
+                    return name
+
+        # Method 4: No fallback - if we can't identify a known bookmaker, return Unknown
+        # This is safer than guessing and potentially returning team names
+        return "Unknown"
 
     def parse_odds_history_modal(self, modal_html: str) -> dict[str, Any]:
         """
