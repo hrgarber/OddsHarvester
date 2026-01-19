@@ -301,21 +301,24 @@ class BrowserHelper:
             ElementHandle or None: The period element if found.
         """
         try:
-            # Look for period buttons with the active-item-calendar class pattern
-            # These are the clickable period tabs
-            period_buttons = await page.query_selector_all(
-                f"div.{OddsPortalSelectors.PERIOD_ACTIVE_CLASS}, "
-                f"div[class*='cursor-pointer']:has-text('{display_label}')"
-            )
-
-            for button in period_buttons:
-                text = await button.text_content()
-                if text and display_label.lower() in text.lower().strip():
-                    return button
-
-            # Alternative: find by exact text match in any div with cursor-pointer
+            # Method 1: Look for period buttons with cursor-pointer class
+            # Period buttons typically have classes like: flex-center cursor-pointer bg-gray-medium
             all_clickable = await page.query_selector_all("div[class*='cursor-pointer']")
             for elem in all_clickable:
+                text = await elem.text_content()
+                if text and text.strip() == display_label:
+                    return elem
+
+            # Method 2: Look for elements with active-item-calendar class (already selected periods)
+            active_periods = await page.query_selector_all(f"div.{OddsPortalSelectors.PERIOD_ACTIVE_CLASS}")
+            for elem in active_periods:
+                text = await elem.text_content()
+                if text and display_label.lower() in text.lower().strip():
+                    return elem
+
+            # Method 3: Look for flex-center elements which are commonly used for period tabs
+            flex_elements = await page.query_selector_all("div.flex-center")
+            for elem in flex_elements:
                 text = await elem.text_content()
                 if text and text.strip() == display_label:
                     return elem
