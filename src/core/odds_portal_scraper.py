@@ -1,5 +1,9 @@
+import asyncio
+from collections.abc import Callable
+from datetime import UTC, datetime
 from enum import Enum
 import random
+import signal
 from typing import Any
 
 from playwright.async_api import Page
@@ -208,6 +212,228 @@ class OddsPortalScraper(BaseScraper):
             bookies_filter=bookies_filter,
             period=period,
         )
+
+    async def scrape_live(
+        self,
+        sport: str,
+        markets: list[str] | None = None,
+        scrape_odds_history: bool = False,
+        target_bookmaker: str | None = None,
+        bookies_filter: BookiesFilter = BookiesFilter.ALL,
+        period: Enum | None = None,
+        poll_interval: int = 30,
+        max_cycles: int | None = None,
+        on_cycle_complete: Callable[[list[dict[str, Any]], int], None] | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Scrapes live/in-play match odds with continuous polling.
+
+        Args:
+            sport (str): The sport to scrape (currently only 'football' supported).
+            markets (Optional[List[str]]): List of markets to scrape.
+            scrape_odds_history (bool): Whether to scrape odds history.
+            target_bookmaker (str): Filter for specific bookmaker.
+            bookies_filter (BookiesFilter): Bookmaker filter to apply.
+            period (Enum): Period to scrape.
+            poll_interval (int): Seconds between polling cycles.
+            max_cycles (Optional[int]): Maximum cycles before stopping. None = infinite.
+            on_cycle_complete (callable): Callback invoked after each cycle with data.
+
+        Returns:
+            List[Dict[str, Any]]: All scraped match data from final cycle.
+        """
+        current_page = self.playwright_manager.page
+        if not current_page:
+            raise RuntimeError("Playwright has not been initialized. Call `start_playwright()` first.")
+
+        url = URLBuilder.get_live_matches_url(sport=sport)
+        self.logger.info(f"Starting live scraping for {sport}")
+        self.logger.info(f"Live URL: {url}")
+        self.logger.info(f"Poll interval: {poll_interval}s, Max cycles: {max_cycles or 'unlimited'}")
+
+        # Track shutdown signal
+        shutdown_requested = False
+
+        def signal_handler(signum, frame):
+            nonlocal shutdown_requested
+            self.logger.info("Shutdown signal received. Finishing current cycle...")
+            shutdown_requested = True
+
+        # Register signal handlers for graceful shutdown
+        original_sigint = signal.signal(signal.SIGINT, signal_handler)
+        original_sigterm = signal.signal(signal.SIGTERM, signal_handler)
+
+        cycle_count = 0
+        all_results = []
+        tracked_matches: dict[str, dict] = {}
+
+        try:
+            while not shutdown_requested:
+                cycle_count += 1
+                cycle_start = datetime.now(UTC)
+                self.logger.info(f"=== Poll Cycle {cycle_count} started at {cycle_start.isoformat()} ===")
+
+                try:
+                    # Navigate to live page
+                    await current_page.goto(url, timeout=15000, wait_until="domcontentloaded")
+                    await self._prepare_page_for_scraping(page=current_page)
+
+                    # Scroll to load all live matches
+                    await self.browser_helper.scroll_until_loaded(
+                        page=current_page,
+                        timeout=30,
+                        scroll_pause_time=2,
+                        max_scroll_attempts=3,
+                        content_check_selector="div[class*='eventRow']",
+                    )
+
+                    # Extract match links
+                    all_match_links = await self.extract_match_links(page=current_page)
+                    self.logger.info(f"Found {len(all_match_links)} total live matches (all sports)")
+
+                    # Filter by sport
+                    match_links = self._filter_links_by_sport(all_match_links, sport)
+                    self.logger.info(f"Filtered to {len(match_links)} {sport} matches")
+
+                    if not match_links:
+                        self.logger.warning("No live matches found this cycle")
+                        cycle_data = []
+                    else:
+                        # Extract odds for all live matches
+                        cycle_data = await self.extract_match_odds(
+                            sport=sport,
+                            match_links=match_links,
+                            markets=markets,
+                            scrape_odds_history=scrape_odds_history,
+                            target_bookmaker=target_bookmaker,
+                            preview_submarkets_only=self.preview_submarkets_only,
+                            bookies_filter=bookies_filter,
+                            period=period,
+                        )
+
+                        # Enrich with live-specific metadata
+                        for match in cycle_data:
+                            match["scrape_type"] = "live"
+                            match["poll_cycle"] = cycle_count
+                            match["match_status"] = self._determine_match_status(
+                                match, tracked_matches
+                            )
+                            tracked_matches[match.get("match_link", "")] = {
+                                "status": match["match_status"],
+                                "last_seen": cycle_start,
+                                "home_score": match.get("home_score"),
+                                "away_score": match.get("away_score"),
+                            }
+
+                    all_results = cycle_data
+
+                    # Invoke callback if provided
+                    if on_cycle_complete and cycle_data:
+                        on_cycle_complete(cycle_data, cycle_count)
+
+                    self.logger.info(
+                        f"Cycle {cycle_count} complete: {len(cycle_data)} matches scraped"
+                    )
+
+                except Exception as e:
+                    self.logger.error(f"Error in poll cycle {cycle_count}: {e}")
+                    # Continue to next cycle unless shutdown requested
+
+                # Check max cycles
+                if max_cycles and cycle_count >= max_cycles:
+                    self.logger.info(f"Reached max cycles ({max_cycles}). Stopping.")
+                    break
+
+                # Wait for next cycle (unless shutdown)
+                if not shutdown_requested:
+                    self.logger.info(f"Waiting {poll_interval}s until next cycle...")
+                    await asyncio.sleep(poll_interval)
+
+        finally:
+            # Restore original signal handlers
+            signal.signal(signal.SIGINT, original_sigint)
+            signal.signal(signal.SIGTERM, original_sigterm)
+            self.logger.info(f"Live scraping stopped after {cycle_count} cycles")
+
+        return all_results
+
+    def _determine_match_status(
+        self,
+        match: dict,
+        tracked: dict,
+    ) -> str:
+        """
+        Determines match status based on tracking history.
+
+        Returns:
+            str: 'live', 'finished', or 'new'
+        """
+        match_link = match.get("match_link")
+
+        if match_link not in tracked:
+            return "new"
+
+        prev = tracked[match_link]
+        prev_score = (prev.get("home_score"), prev.get("away_score"))
+        curr_score = (match.get("home_score"), match.get("away_score"))
+
+        # If scores exist and haven't changed, still live (score just hasn't changed)
+        if prev_score == curr_score and prev_score != (None, None):
+            return "live"
+
+        return "live"
+
+    def _filter_links_by_sport(
+        self,
+        links: list[str],
+        sport: str | None,
+        leagues: list[str] | None = None,
+    ) -> list[str]:
+        """
+        Filters match links by sport and optionally by leagues.
+
+        This is an extensible filtering method that can be used for:
+        - Live scraping (filter by sport from mixed results)
+        - Future UI filtering needs
+        - League-specific filtering
+
+        Args:
+            links: List of match URLs to filter.
+            sport: Sport to filter by (e.g., 'football', 'basketball').
+                   If None, returns all links.
+            leagues: Optional list of league slugs to filter by
+                     (e.g., ['england-premier-league', 'spain-laliga']).
+                     If None, all leagues for the sport are included.
+
+        Returns:
+            List of filtered match links.
+
+        URL patterns:
+            - Football: /football/england/premier-league/...
+            - Basketball: /basketball/usa/nba/...
+            - Tennis: /tennis/atp-tour/...
+            - Hockey: /hockey/usa/nhl/...
+        """
+        if not sport:
+            return links
+
+        # Sport appears as first path segment after domain
+        # e.g., https://www.oddsportal.com/football/england/...
+        sport_pattern = f"/{sport}/"
+
+        filtered = [link for link in links if sport_pattern in link.lower()]
+
+        # Optional league filtering for finer control
+        if leagues and filtered:
+            league_filtered = []
+            for link in filtered:
+                for league in leagues:
+                    if f"/{league}/" in link.lower() or f"/{league}-" in link.lower():
+                        league_filtered.append(link)
+                        break
+            filtered = league_filtered
+
+        return filtered
 
     async def _prepare_page_for_scraping(self, page: Page):
         """

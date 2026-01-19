@@ -100,3 +100,21 @@ class URLBuilder:
             raise ValueError(f"Invalid league '{league}' for sport '{sport}'. Available: {', '.join(leagues.keys())}")
 
         return leagues[league]
+
+    @staticmethod
+    def get_live_matches_url(sport: str | None = None) -> str:
+        """
+        Constructs the URL for live/in-play matches.
+
+        Note: OddsPortal's live page is at /inplay-odds/ without sport suffix.
+        Sport filtering happens on the page itself, not via URL.
+
+        Args:
+            sport (Optional[str]): The sport (used for logging, not URL).
+
+        Returns:
+            str: The URL for live matches (/inplay-odds/).
+        """
+        # OddsPortal live page doesn't support sport-specific URLs
+        # All live matches are shown on the same page
+        return f"{ODDSPORTAL_BASE_URL}/inplay-odds/"

@@ -9,6 +9,7 @@ from src.storage.storage_type import StorageType
 from src.utils.bookies_filter_enum import BookiesFilter
 from src.utils.command_enum import CommandEnum
 from src.utils.odds_format_enum import OddsFormat
+from src.utils.output_mode_enum import OutputMode
 from src.utils.sport_league_constants import SPORTS_LEAGUES_URLS_MAPPING
 from src.utils.sport_market_constants import Sport
 from src.utils.utils import get_supported_markets
@@ -81,6 +82,15 @@ class CLIArgumentValidator:
 
         if hasattr(args, "period"):
             self._validate_period(period=args.period, sport=args.sport)
+
+        if hasattr(args, "poll_interval"):
+            errors.extend(self._validate_poll_interval(args.poll_interval))
+
+        if hasattr(args, "output_mode"):
+            errors.extend(self._validate_output_mode(args.output_mode))
+
+        if hasattr(args, "max_cycles"):
+            errors.extend(self._validate_max_cycles(args.max_cycles))
 
         errors.extend(
             self._validate_browser_settings(
@@ -410,3 +420,35 @@ class CLIArgumentValidator:
             raise ValueError(
                 f"Invalid period: '{period}' for sport '{sport}'. Supported periods are: {supported_periods}."
             ) from None
+
+    def _validate_poll_interval(self, poll_interval: int) -> list[str]:
+        """Validates poll interval for live scraping."""
+        errors = []
+        if poll_interval is not None:
+            if not isinstance(poll_interval, int) or poll_interval < 10:
+                errors.append(
+                    f"Invalid poll_interval: '{poll_interval}'. Must be an integer >= 10 seconds."
+                )
+            elif poll_interval > 300:
+                self.logger.warning(
+                    f"Poll interval of {poll_interval}s is high. Live odds may become stale."
+                )
+        return errors
+
+    def _validate_output_mode(self, output_mode: str) -> list[str]:
+        """Validates output mode for live scraping."""
+        errors = []
+        if output_mode is not None:
+            try:
+                OutputMode(output_mode)
+            except ValueError:
+                supported = ", ".join([m.value for m in OutputMode])
+                errors.append(f"Invalid output_mode: '{output_mode}'. Supported: {supported}.")
+        return errors
+
+    def _validate_max_cycles(self, max_cycles: int | None) -> list[str]:
+        """Validates max cycles for live scraping."""
+        errors = []
+        if max_cycles is not None and (not isinstance(max_cycles, int) or max_cycles <= 0):
+            errors.append(f"Invalid max_cycles: '{max_cycles}'. Must be a positive integer.")
+        return errors

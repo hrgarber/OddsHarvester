@@ -66,4 +66,7 @@ class CLIArgumentHandler:
             "preview_submarkets_only": getattr(args, "preview_submarkets_only", False),
             "bookies_filter": getattr(args, "bookies_filter", "all"),
             "period": getattr(args, "period", None),
+            "poll_interval": getattr(args, "poll_interval", 30),
+            "output_mode": getattr(args, "output_mode", "append"),
+            "max_cycles": getattr(args, "max_cycles", None),
         }

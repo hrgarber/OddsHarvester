@@ -1,5 +1,7 @@
 import asyncio
 import logging
+from collections.abc import Callable
+from typing import Any
 
 from src.core.browser_helper import BrowserHelper
 from src.core.odds_portal_market_extractor import OddsPortalMarketExtractor
@@ -52,6 +54,9 @@ async def run_scraper(
     preview_submarkets_only: bool = False,
     bookies_filter: str = BookiesFilter.ALL.value,
     period: str | None = None,
+    poll_interval: int = 30,
+    max_cycles: int | None = None,
+    on_cycle_complete: Callable[[list[dict[str, Any]], int], None] | None = None,
 ) -> dict:
     """Runs the scraping process and handles execution."""
 
@@ -201,8 +206,32 @@ async def run_scraper(
                     period=period_enum,
                 )
 
+        elif command == CommandEnum.LIVE:
+            if not sport:
+                raise ValueError("'sport' must be provided for live scraping.")
+
+            logger.info(f"""
+                Scraping live matches for sport={sport}, markets={markets},
+                poll_interval={poll_interval}, max_cycles={max_cycles},
+                scrape_odds_history={scrape_odds_history}, target_bookmaker={target_bookmaker},
+                bookies_filter={bookies_filter}, period={period}
+            """)
+
+            # Live scraping doesn't use retry_scrape since it has its own loop
+            return await scraper.scrape_live(
+                sport=sport,
+                markets=markets,
+                scrape_odds_history=scrape_odds_history,
+                target_bookmaker=target_bookmaker,
+                bookies_filter=bookies_filter_enum,
+                period=period_enum,
+                poll_interval=poll_interval,
+                max_cycles=max_cycles,
+                on_cycle_complete=on_cycle_complete,
+            )
+
         else:
-            raise ValueError(f"Unknown command: {command}. Supported commands are 'upcoming-matches' and 'historic'.")
+            raise ValueError(f"Unknown command: {command}. Supported commands are 'scrape_upcoming', 'scrape_historic', and 'scrape_live'.")
 
     except Exception as e:
         logger.error(f"An error occured: {e}")

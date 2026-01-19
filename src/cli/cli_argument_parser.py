@@ -15,6 +15,7 @@ from src.utils.period_constants import (
     RugbyUnionPeriod,
     TennisPeriod,
 )
+from src.utils.output_mode_enum import OutputMode
 from src.utils.sport_market_constants import Sport
 
 
@@ -44,6 +45,7 @@ class CLIArgumentParser:
 
         self._add_upcoming_parser(subparsers)
         self._add_historic_parser(subparsers)
+        self._add_live_parser(subparsers)
 
     def _add_upcoming_parser(self, subparsers):
         parser = subparsers.add_parser("scrape_upcoming", help="Scrape odds for upcoming matches.")
@@ -62,6 +64,31 @@ class CLIArgumentParser:
             help="📅 Season to scrape (YYYY, YYYY-YYYY, or 'current'; e.g., 2023, 2022-2023, current).",
         )
         parser.add_argument("--max_pages", type=int, help="📑 Maximum number of pages to scrape (optional).")
+
+    def _add_live_parser(self, subparsers):
+        parser = subparsers.add_parser(
+            "scrape_live", help="Scrape live/in-play odds with continuous polling."
+        )
+        self._add_common_arguments(parser)
+        parser.add_argument(
+            "--poll_interval",
+            type=int,
+            default=30,
+            help="Polling interval in seconds between scrape cycles (default: 30, min: 10).",
+        )
+        parser.add_argument(
+            "--output_mode",
+            type=str,
+            choices=[m.value for m in OutputMode],
+            default=OutputMode.APPEND.value,
+            help="Output mode: 'append' adds to file, 'overwrite' replaces (default: append).",
+        )
+        parser.add_argument(
+            "--max_cycles",
+            type=int,
+            default=None,
+            help="Maximum number of polling cycles (optional, runs indefinitely if not set).",
+        )
 
     def _add_common_arguments(self, parser):
         parser.add_argument(
